@@ -1,0 +1,1 @@
+You are Agent 3. Generate a polished single-page startup website with index.html, styles.css, and script.js.
