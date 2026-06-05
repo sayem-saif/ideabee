@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 import requests
+from requests import RequestException
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 
@@ -17,6 +18,10 @@ TAVILY_URL = "https://api.tavily.com/search"
 
 class ProviderError(RuntimeError):
     pass
+
+
+def providers_disabled() -> bool:
+    return os.getenv("IDEABEE_OFFLINE", "").strip().lower() in {"1", "true", "yes"}
 
 
 def extract_json(text: str) -> dict[str, Any]:
@@ -33,68 +38,99 @@ def extract_json(text: str) -> dict[str, Any]:
 
 
 def openrouter_chat(model: str, messages: list[dict[str, Any]], temperature: float = 0.4) -> str:
+    if providers_disabled():
+        raise ProviderError("Provider calls are disabled by IDEABEE_OFFLINE")
+
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise ProviderError("OPENROUTER_API_KEY is missing")
 
-    response = requests.post(
-        OPENROUTER_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost",
-            "X-Title": "IdeaBee",
-        },
-        json={"model": model, "messages": messages, "temperature": temperature},
-        timeout=180,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["choices"][0]["message"]["content"].strip()
+    try:
+        response = requests.post(
+            OPENROUTER_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost",
+                "X-Title": "IdeaBee",
+            },
+            json={"model": model, "messages": messages, "temperature": temperature},
+            timeout=180,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except RequestException as exc:
+        raise ProviderError(f"OpenRouter request failed: {exc}") from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProviderError(f"OpenRouter response parse failed: {exc}") from exc
 
 
 def hf_chat(model: str, messages: list[dict[str, Any]], temperature: float = 0.4) -> str:
+    if providers_disabled():
+        raise ProviderError("Provider calls are disabled by IDEABEE_OFFLINE")
+
     api_key = os.getenv("HF_TOKEN", "").strip()
     if not api_key:
         raise ProviderError("HF_TOKEN is missing")
 
-    client = InferenceClient(api_key=api_key)
-    completion = client.chat.completions.create(model=model, messages=messages, temperature=temperature)
-    message = completion.choices[0].message
-    content = getattr(message, "content", None)
-    return str(content if content is not None else message).strip()
+    try:
+        client = InferenceClient(api_key=api_key)
+        completion = client.chat.completions.create(model=model, messages=messages, temperature=temperature)
+        message = completion.choices[0].message
+        content = getattr(message, "content", None)
+        return str(content if content is not None else message).strip()
+    except Exception as exc:
+        raise ProviderError(f"HF chat failed: {exc}") from exc
 
 
 def web_search(query: str, max_results: int = 5) -> list[dict[str, str]]:
+    if providers_disabled():
+        return []
+
     tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
     if tavily_key:
-        response = requests.post(
-            TAVILY_URL,
-            json={
-                "api_key": tavily_key,
-                "query": query,
-                "search_depth": "advanced",
-                "max_results": max_results,
-                "include_answer": False,
-                "include_raw_content": False,
-            },
-            timeout=120,
+        try:
+            response = requests.post(
+                TAVILY_URL,
+                json={
+                    "api_key": tavily_key,
+                    "query": query,
+                    "search_depth": "advanced",
+                    "max_results": max_results,
+                    "include_answer": False,
+                    "include_raw_content": False,
+                },
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            results = data.get("results", [])
+            return [
+                {
+                    "title": str(result.get("title", "")),
+                    "url": str(result.get("url", "")),
+                    "content": str(result.get("content", "")),
+                }
+                for result in results[:max_results]
+            ]
+        except RequestException:
+            # Fall back to DuckDuckGo when Tavily is unavailable/rate-limited.
+            pass
+
+    if os.getenv("ALLOW_DUCKDUCKGO_SEARCH", "").strip().lower() not in {"1", "true", "yes"}:
+        return []
+
+    try:
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=60,
         )
         response.raise_for_status()
-        data = response.json()
-        results = data.get("results", [])
-        return [
-            {"title": str(result.get("title", "")), "url": str(result.get("url", "")), "content": str(result.get("content", ""))}
-            for result in results[:max_results]
-        ]
-
-    response = requests.get(
-        "https://html.duckduckgo.com/html/",
-        params={"q": query},
-        headers={"User-Agent": "Mozilla/5.0"},
-        timeout=60,
-    )
-    response.raise_for_status()
+    except RequestException as exc:
+        raise ProviderError(f"Web search failed: {exc}") from exc
 
     from bs4 import BeautifulSoup
 

@@ -5,7 +5,13 @@ from pathlib import Path
 from typing import Iterable
 
 import chromadb
-from sentence_transformers import SentenceTransformer
+from chromadb.utils import embedding_functions
+from dotenv import load_dotenv
+
+load_dotenv()
+
+if os.getenv("HF_TOKEN") and not os.getenv("HUGGINGFACE_HUB_TOKEN"):
+    os.environ["HUGGINGFACE_HUB_TOKEN"] = os.getenv("HF_TOKEN", "")
 
 
 def _chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> list[str]:
@@ -32,15 +38,6 @@ def _chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> list[s
     return chunks
 
 
-class SentenceTransformerEmbeddingFunction:
-    def __init__(self, model_name: str) -> None:
-        self.model = SentenceTransformer(model_name)
-
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        embeddings = self.model.encode(input, normalize_embeddings=True)
-        return embeddings.tolist()
-
-
 def _iter_documents(source_dir: Path) -> Iterable[Path]:
     for path in source_dir.rglob("*"):
         if path.is_file() and path.suffix.lower() in {".txt", ".md", ".markdown"}:
@@ -53,7 +50,7 @@ def build_knowledge_base(source_dir: str = "knowledge_base", persist_dir: str = 
     Path(persist_dir).mkdir(parents=True, exist_ok=True)
 
     embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-    embedding_function = SentenceTransformerEmbeddingFunction(embedding_model)
+    embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=embedding_model)
     client = chromadb.PersistentClient(path=persist_dir)
     collection = client.get_or_create_collection(name="ideabee", embedding_function=embedding_function)
 

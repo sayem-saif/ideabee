@@ -1,0 +1,10 @@
+{
+  "checks": [
+    "Website files exist",
+    "Website HTML looks valid",
+    "Pitch deck has 12 slides",
+    "PPTX exists",
+    "PDF exists"
+  ],
+  "quality_score": 10.0
+}

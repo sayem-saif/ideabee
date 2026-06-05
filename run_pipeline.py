@@ -1,78 +1,51 @@
 from __future__ import annotations
 
+import argparse
+import json
 import os
-import sys
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 
+from pipeline import ensure_directories, run_pipeline
+
 load_dotenv()
 
-from agents.agent1_polisher import polish_idea
-from agents.agent2_researcher import research_market
-from agents.agent3_website import build_website_artifact
-from agents.agent4_pitch import build_pitch_deck
-from agents.agent5_deliverer import finalize_delivery
-from rag.retriever import retrieve_context
-from rag.build_kb import build_knowledge_base
-from utils import providers
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the IdeaBee pipeline")
+    parser.add_argument(
+        "idea",
+        nargs="?",
+        default=os.getenv(
+            "IDEABEE_SAMPLE_IDEA",
+            "An AI startup builder that turns rough ideas into validated ventures.",
+        ),
+    )
+    parser.add_argument("--output-dir", default=os.getenv("OUTPUT_DIR", "outputs"))
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use local fallbacks only; skip OpenRouter, Hugging Face, Tavily, and DuckDuckGo.",
+    )
+    args = parser.parse_args()
 
-@dataclass
-class AgentState:
-    idea: str
-    polished: dict[str, Any] = field(default_factory=dict)
-    research: dict[str, Any] = field(default_factory=dict)
-    website: dict[str, Any] = field(default_factory=dict)
-    pitch: dict[str, Any] = field(default_factory=dict)
-    delivery: dict[str, Any] = field(default_factory=dict)
+    if args.offline:
+        os.environ["IDEABEE_OFFLINE"] = "1"
 
-
-def ensure_directories() -> None:
-    for relative_path in ["agents", "rag", "knowledge_base", "templates", "outputs", "prompts", "utils"]:
-        Path(relative_path).mkdir(parents=True, exist_ok=True)
-
-
-def run_pipeline(idea: str) -> AgentState:
     ensure_directories()
-    print("Building knowledge base (placeholder)...")
-    kb = build_knowledge_base()
+    print("Running IdeaBee pipeline...")
+    result = run_pipeline(args.idea, output_dir=args.output_dir)
 
-    print("Polishing idea...")
-    polished = polish_idea(idea)
-
-    print("Retrieving context from KB...")
-    context = retrieve_context(idea)
-
-    print("Running research agent...")
-    research = research_market(polished, context="\n".join(context))
-
-    print("Building website artifact...")
-    website = build_website_artifact(polished, output_dir=os.getenv("OUTPUT_DIR", "outputs"))
-
-    print("Building pitch deck outline...")
-    pitch = build_pitch_deck(polished, output_dir=os.getenv("OUTPUT_DIR", "outputs"))
-
-    print("Finalizing delivery...")
-    delivery = finalize_delivery(polished, research, website, pitch, output_dir=os.getenv("OUTPUT_DIR", "outputs"))
-
-    state = AgentState(idea=idea)
-    state.polished = polished
-    state.research = research
-    state.website = website
-    state.pitch = pitch
-    state.delivery = delivery
-
-    print("Pipeline complete. Artifacts written to:", os.path.abspath(os.getenv("OUTPUT_DIR", "outputs")))
-    return state
+    summary = {
+        "quality_score": result["delivery"].get("quality_score"),
+        "checks": result["delivery"].get("checks", []),
+        "website_bundle": result["website"].get("bundle"),
+        "pptx": result["pitch"].get("pptx"),
+        "pdf": result["pitch"].get("pdf"),
+        "delivery_zip": result["delivery"].get("package"),
+    }
+    print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
-    sample_idea = os.getenv("IDEABEE_SAMPLE_IDEA", "An AI startup builder that turns rough ideas into validated ventures.")
-    if len(sys.argv) > 1:
-        idea = " ".join(sys.argv[1:])
-    else:
-        idea = sample_idea
-    run_pipeline(idea)
+    main()
